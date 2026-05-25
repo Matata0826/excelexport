@@ -1,0 +1,84 @@
+# ============================================================
+# 业务数据清洗与未回销看板 — 全局配置文件
+# ============================================================
+
+paths:
+  exports_dir: "exports"
+  logs_dir: "logs"
+
+# --- 列名映射 ---
+# "标准名": ["可能的别名1", ...]
+# 清洗时自动匹配，不区分大小写和前后空格
+column_mapping:
+  业务员: ["业务员", "销售人员", "sales", "salesman", "业务员姓名"]
+  出单日期: ["出单日期", "订单日期", "order_date", "开单日期", "交易日期"]
+  金额: ["金额", "amount", "总金额", "交易金额"]
+  单号: ["单号", "订单号", "编号", "id", "order_id"]
+
+# --- 异常值处理规则 ---
+cleaning:
+  amount:
+    strategy: "coerce"
+    remove_nulls: true
+  date:
+    strategy: "coerce"
+    date_format: null
+  global:
+    drop_all_null: false
+
+# --- 主号映射 ---
+mapping:
+  template_columns:
+    A: "主号机构"
+    B: "主号业务员"
+    C: "原始业务员名称"
+  on_unmatched: "keep_original"
+  log_unmatched: true
+
+# --- 到期天数（基于出单日期计算）---
+due_days:
+  reference_date: "today"
+  buckets:
+    - label: "0-15天"
+      min: 0
+      max: 15
+    - label: "15-30天"
+      min: 16
+      max: 30
+    - label: "30-60天"
+      min: 31
+      max: 60
+    - label: "60-90天"
+      min: 61
+      max: 90
+    - label: "超90天"
+      min: 91
+      max: 9999
+
+# --- 导出 ---
+export:
+  filename_format: "{timestamp}_{description}_{salesperson}.xlsx"
+  timestamp_format: "%Y%m%d_%H%M%S"
+  description: "未回销清单"
+  sheet_name: "未回销明细"
+
+# --- 看板显示 ---
+dashboard:
+  page_title: "业务数据清洗与未回销看板"
+  sidebar_title: "控制面板"
+  metric_cards:
+    - key: "unwritten_count"
+      label: "未回销总件数"
+  chart:
+    title: "未回销件数分布（按到期天数）"
+    x_label: "到期天数区间"
+    y_label: "未回销件数"
+    color_sequence: ["#5470c6", "#91cc75", "#fac858", "#ee6666", "#fc8452"]
+
+# --- 日志 ---
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+  datefmt: "%Y-%m-%d %H:%M:%S"
+  per_run_file: true
+  console_output: true
