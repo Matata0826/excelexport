@@ -88,7 +88,7 @@ def render_detail_table(df: pd.DataFrame) -> None:
         st.info("暂无数据")
         return
 
-    display_cols = [c for c in ["单号", "业务员", "金额", "出单日期", "到期天数"] if c in df.columns]
+    display_cols = [c for c in ["单号", "主号机构", "主号业务员", "业务员", "金额", "出单日期", "到期天数"] if c in df.columns]
     st.dataframe(
         df[display_cols].sort_values("到期天数", ascending=False),
         use_container_width=True,

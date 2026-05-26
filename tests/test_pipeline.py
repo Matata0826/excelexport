@@ -26,6 +26,12 @@ class TestPipelineEndToEnd:
         # 到期天数已计算（基于出单日期）
         assert "到期天数" in result.columns
 
+        # 机构和主号列已补全
+        assert "主号机构" in result.columns
+        assert "主号业务员" in result.columns
+        assert result.loc[0, "主号机构"] == "机构A"
+        assert result.loc[0, "主号业务员"] == "张三"
+
     def test_empty_df_returns_empty(self, config):
         pipeline = Pipeline(config)
         result = pipeline.run(pd.DataFrame())

@@ -40,7 +40,19 @@ audit: AuditLogger = st.session_state.audit
 def read_uploaded_excel(uploaded_file) -> Optional[pd.DataFrame]:
     if uploaded_file is None:
         return None
-    return pd.read_excel(uploaded_file)
+
+    filename: str = uploaded_file.name.lower() if hasattr(uploaded_file, "name") else ""
+
+    if filename.endswith(".xls"):
+        engine = "xlrd"
+    else:
+        engine = "openpyxl"
+
+    try:
+        return pd.read_excel(uploaded_file, engine=engine)
+    except Exception as e:
+        st.error(f"Excel 文件读取失败：{e}\n请检查文件是否损坏、加密或格式不正确。")
+        return None
 
 
 def run_pipeline(
@@ -49,6 +61,24 @@ def run_pipeline(
 ) -> pd.DataFrame:
     pipeline = Pipeline(config, audit)
     return pipeline.run(raw_df, mapping_df=mapping_df)
+
+
+def _get_institutions(df: pd.DataFrame) -> list[str]:
+    """从清洗后数据中提取机构列表（去重+排序）。"""
+    if "主号机构" not in df.columns:
+        return []
+    vals = df["主号机构"].dropna().astype(str).str.strip()
+    return sorted(v for v in vals.unique() if v)
+
+
+def _get_salespeople_for_institution(df: pd.DataFrame, institution: str) -> list[str]:
+    """获取指定机构下的业务员列表。institution="" 表示全部。"""
+    if "业务员" not in df.columns:
+        return []
+    if not institution:
+        return sorted(df["业务员"].dropna().astype(str).str.strip().unique().tolist())
+    mask = df["主号机构"].astype(str).str.strip() == institution
+    return sorted(df.loc[mask, "业务员"].dropna().astype(str).str.strip().unique().tolist())
 
 
 # ---- 侧边栏 ----
@@ -83,19 +113,48 @@ with st.sidebar:
 
     st.divider()
 
-    # -- 业务员筛选 --
+    # -- 机构 & 业务员级联筛选 --
+    all_institutions: list[str] = []
     all_salespeople: list[str] = []
+
     if "cleaned_df" in st.session_state and st.session_state.cleaned_df is not None:
         df = st.session_state.cleaned_df
-        if "业务员" in df.columns:
-            all_salespeople = sorted(df["业务员"].dropna().unique().tolist())
+        all_institutions = _get_institutions(df)
+        all_salespeople = sorted(df["业务员"].dropna().astype(str).str.strip().unique().tolist()) if "业务员" in df.columns else []
+
+    # 机构下拉
+    institution_options = ["全部机构"] + all_institutions
+    # 保持上次选值（若仍在选项中）
+    prev_inst = st.session_state.get("_selected_institution", "全部机构")
+    inst_default = prev_inst if prev_inst in institution_options else "全部机构"
+    selected_institution = st.selectbox(
+        "🏢 所属机构",
+        options=institution_options,
+        index=institution_options.index(inst_default),
+        key="institution_selector",
+    )
+    st.session_state["_selected_institution"] = selected_institution
+
+    # 级联：按机构过滤业务员列表
+    if selected_institution == "全部机构":
+        available_people = all_salespeople
+    else:
+        available_people = _get_salespeople_for_institution(
+            st.session_state.cleaned_df, selected_institution,
+        )
+
+    # 清理上次多选中已不在可用列表中的选项
+    prev_selected = st.session_state.get("_selected_people", [])
+    valid_prev = [p for p in prev_selected if p in available_people]
 
     selected_people = st.multiselect(
         "🔍 业务员筛选",
-        options=all_salespeople,
-        default=all_salespeople,
+        options=available_people,
+        default=valid_prev if valid_prev else available_people,
         placeholder="选择业务员（默认全选）",
+        key="people_multiselect",
     )
+    st.session_state["_selected_people"] = selected_people
 
     st.divider()
 
@@ -125,25 +184,20 @@ with st.sidebar:
         st.subheader("📥 导出清单")
 
         df = st.session_state.cleaned_df
-        selected_for_export = selected_people if selected_people else all_salespeople
+        selected_for_export = selected_people if selected_people else available_people
 
-        if not selected_for_export:
-            st.info("暂无可导出的业务员")
-        else:
+        # 按钮 A：导出已选业务员（一人一表 + zip）
+        if selected_for_export:
             export_label = (
                 f"一键导出 {len(selected_for_export)} 人"
                 if len(selected_for_export) > 1
                 else f"导出 {selected_for_export[0]}"
             )
-
             if st.button(f"📦 {export_label}", type="secondary", use_container_width=True):
                 try:
                     with st.spinner(f"正在导出 {len(selected_for_export)} 位业务员..."):
-                        zip_path, filepaths = export_batch(
-                            df, config, selected_for_export,
-                        )
+                        zip_path, filepaths = export_batch(df, config, selected_for_export)
 
-                    # 提供 zip 一键下载
                     with open(zip_path, "rb") as f:
                         st.download_button(
                             label=f"⬇️ 下载批量 zip（{len(filepaths)} 个文件）",
@@ -152,14 +206,38 @@ with st.sidebar:
                             mime="application/zip",
                             use_container_width=True,
                         )
-
-                    # 列出全部导出文件路径
                     st.success(f"导出完成，共生成 {len(filepaths)} 个文件：")
                     for fp in filepaths:
                         st.caption(f"  • `{fp}`")
 
                 except ValueError as e:
                     st.warning(str(e))
+        else:
+            st.info("当前筛选下无业务员可导出")
+
+        # 按钮 B：导出该机构全部业务员（仅当选中具体机构时显示）
+        if selected_institution != "全部机构":
+            inst_people = _get_salespeople_for_institution(df, selected_institution)
+            if inst_people:
+                if st.button(f"🏢 导出「{selected_institution}」全部 {len(inst_people)} 人", use_container_width=True):
+                    try:
+                        with st.spinner(f"正在导出「{selected_institution}」..."):
+                            zip_path, filepaths = export_batch(df, config, inst_people)
+
+                        with open(zip_path, "rb") as f:
+                            st.download_button(
+                                label=f"⬇️ 下载 {selected_institution} zip（{len(filepaths)} 个文件）",
+                                data=f,
+                                file_name=Path(zip_path).name,
+                                mime="application/zip",
+                                use_container_width=True,
+                            )
+                        st.success(f"导出完成，共生成 {len(filepaths)} 个文件：")
+                        for fp in filepaths:
+                            st.caption(f"  • `{fp}`")
+
+                    except ValueError as e:
+                        st.warning(str(e))
 
 # ---- 主区域 ----
 st.title(dash_cfg.get("page_title", "业务数据清洗与未回销看板"))
@@ -169,10 +247,14 @@ if "cleaned_df" not in st.session_state or st.session_state.cleaned_df is None:
 else:
     df: pd.DataFrame = st.session_state.cleaned_df
 
-    if selected_people and "业务员" in df.columns:
-        df_filtered = df[df["业务员"].isin(selected_people)]
+    # 多级筛选：机构 → 业务员
+    if selected_institution != "全部机构" and "主号机构" in df.columns:
+        df_filtered = df[df["主号机构"].astype(str).str.strip() == selected_institution]
     else:
         df_filtered = df
+
+    if selected_people and "业务员" in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered["业务员"].isin(selected_people)]
 
     unwritten_count = len(df_filtered)
 
