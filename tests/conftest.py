@@ -22,6 +22,13 @@ def config() -> dict:
             "date": {"strategy": "coerce", "date_format": None},
             "global": {"drop_all_null": False},
         },
+        "archive_status": {
+            "column_aliases": ["归档状态", "是否归档", "状态", "Status"],
+            "column_keywords": ["归档", "状态", "是否"],
+            "column_exclude_keywords": ["时间", "日期", "date", "time", "月份"],
+            "keep_values": ["未归档", "归档不齐", "否", "No"],
+            "archived_values": ["归档齐全", "已归档", "已完成", "是", "Yes"],
+        },
         "mapping": {
             "template_columns": {"A": "主号机构", "B": "主号业务员", "C": "原始业务员名称"},
             "on_unmatched": "keep_original",

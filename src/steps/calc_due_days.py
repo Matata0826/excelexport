@@ -1,4 +1,4 @@
-"""步骤4：到期天数计算 — reference_date - 基准日期。"""
+"""步骤5：到期天数计算 — reference_date - 基准日期。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pandas as pd
 from .base import CleaningStep, register_step
 
 
-@register_step("calc_due_days", order=4)
+@register_step("calc_due_days", order=5)
 class CalcDueDays(CleaningStep):
     """计算 到期天数 = reference_date - 基准日期。
 

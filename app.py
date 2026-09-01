@@ -59,18 +59,24 @@ def run_pipeline(
     raw_df: pd.DataFrame,
     mapping_df: Optional[pd.DataFrame],
     base_date_col: Optional[str] = None,
-) -> tuple[pd.DataFrame, dict]:
-    """执行清洗管道，返回 (cleaned_df, match_info)。
+    force_unarchived: bool = False,
+) -> tuple[pd.DataFrame, dict, dict]:
+    """执行清洗管道，返回 (cleaned_df, match_info, archive_info)。
 
     match_info = {"status": "success"|"failed"|"pending", "matched_column": str}
+    archive_info = {"data_type": "full"|"pure_unarchived", "status_column": str, ...}
     """
     pipeline = Pipeline(config, audit)
-    df = pipeline.run(raw_df, mapping_df=mapping_df, base_date_col=base_date_col)
+    df = pipeline.run(
+        raw_df, mapping_df=mapping_df,
+        base_date_col=base_date_col, force_unarchived=force_unarchived,
+    )
     match_info: dict = {
         "status": getattr(pipeline, "_due_days_match_status", "pending"),
         "matched_column": getattr(pipeline, "_due_days_matched_column", ""),
     }
-    return df, match_info
+    archive_info: dict = getattr(pipeline, "_archive_status_result", {}) or {}
+    return df, match_info, archive_info
 
 
 def _get_institutions(df: pd.DataFrame) -> list[str]:
@@ -78,6 +84,14 @@ def _get_institutions(df: pd.DataFrame) -> list[str]:
     if "主号机构" not in df.columns:
         return []
     vals = df["主号机构"].dropna().astype(str).str.strip()
+    return sorted(v for v in vals.unique() if v)
+
+
+def _get_statuses(df: pd.DataFrame, status_col: str = "归档状态") -> list[str]:
+    """从清洗后数据中提取归档状态列表（去重+排序）。"""
+    if not status_col or status_col not in df.columns:
+        return []
+    vals = df[status_col].dropna().astype(str).str.strip()
     return sorted(v for v in vals.unique() if v)
 
 
@@ -100,6 +114,27 @@ def _get_date_columns(df: pd.DataFrame) -> list[str]:
     return date_cols
 
 
+def _render_archive_notice(info: dict) -> None:
+    """在页面顶部显示归档状态识别结果提示。"""
+    dt = info.get("data_type", "pure_unarchived")
+    col = info.get("status_column", "")
+    total = info.get("total", 0)
+    kept = info.get("kept", 0)
+    filtered = info.get("filtered", 0)
+
+    if info.get("force_unarchived"):
+        st.info(f"🤖 已强制覆盖：跳过归档状态筛选，保留全量 {total} 行数据")
+    elif dt == "full":
+        st.success(
+            f"🤖 已自动识别为全量数据（状态列「{col}」），"
+            f"已过滤 {filtered} 条已归档件，保留 {kept} 条未归档记录"
+        )
+    elif not info.get("has_status_column"):
+        st.info(f"🤖 未找到归档状态列，视为纯未归档数据，保留全部 {kept} 行")
+    else:
+        st.info(f"🤖 状态列「{col}」中未发现已归档值，视为纯未归档数据，保留全部 {kept} 行")
+
+
 # ---- 侧边栏 ----
 dash_cfg = config.get("dashboard", {})
 with st.sidebar:
@@ -119,6 +154,31 @@ with st.sidebar:
         help="A列：主号机构 | B列：主号业务员 | C列：原始业务员名称",
     )
 
+    # -- 归档状态筛选：强制覆盖开关 --
+    force_unarchived = st.checkbox(
+        "强制覆盖：将此表视为纯未归档数据（不进行状态筛选）",
+        key="force_unarchived_checkbox",
+        help="勾选后跳过归档状态识别与过滤，保留全量数据",
+    )
+
+    # 勾选状态变化且已有缓存数据时，自动重跑清洗（无需重新上传）
+    if (
+        "_raw_df" in st.session_state
+        and force_unarchived != st.session_state.get("_force_applied", False)
+    ):
+        with st.spinner("正在按最新设置重新清洗..."):
+            cleaned, match_info, archive_info = run_pipeline(
+                st.session_state["_raw_df"],
+                st.session_state.get("_mapping_df"),
+                base_date_col=st.session_state.get("_base_date_column"),
+                force_unarchived=force_unarchived,
+            )
+            st.session_state.cleaned_df = cleaned
+            st.session_state["_base_date_match_info"] = match_info
+            st.session_state["_archive_info"] = archive_info
+            st.session_state["_force_applied"] = force_unarchived
+        st.rerun()
+
     st.divider()
 
     with st.expander("📋 运行状态与日志", expanded=False):
@@ -135,11 +195,16 @@ with st.sidebar:
     # -- 机构 & 业务员级联筛选 --
     all_institutions: list[str] = []
     all_salespeople: list[str] = []
+    all_statuses: list[str] = []
+    status_col = "归档状态"  # 默认；若管道识别到状态列则覆盖
 
     if "cleaned_df" in st.session_state and st.session_state.cleaned_df is not None:
         df = st.session_state.cleaned_df
         all_institutions = _get_institutions(df)
         all_salespeople = sorted(df["业务员"].dropna().astype(str).str.strip().unique().tolist()) if "业务员" in df.columns else []
+        _archive_info = st.session_state.get("_archive_info") or {}
+        status_col = _archive_info.get("status_column") or "归档状态"
+        all_statuses = _get_statuses(df, status_col)
 
     # 机构下拉
     institution_options = ["全部机构"] + all_institutions
@@ -153,6 +218,18 @@ with st.sidebar:
         key="institution_selector",
     )
     st.session_state["_selected_institution"] = selected_institution
+
+    # 归档状态多选
+    prev_statuses = st.session_state.get("_selected_statuses", [])
+    valid_statuses = [s for s in prev_statuses if s in all_statuses]
+    selected_statuses = st.multiselect(
+        "📋 归档状态",
+        options=all_statuses,
+        default=valid_statuses if valid_statuses else all_statuses,
+        placeholder="选择归档状态（默认全选）",
+        key="status_multiselect",
+    )
+    st.session_state["_selected_statuses"] = selected_statuses
 
     # 级联：按机构过滤业务员列表
     if selected_institution == "全部机构":
@@ -198,12 +275,15 @@ with st.sidebar:
                     # 清除上次手动选择的基准日期列（新文件可能有不同的列名）
                     st.session_state.pop("_base_date_column", None)
 
-                    cleaned, match_info = run_pipeline(
+                    cleaned, match_info, archive_info = run_pipeline(
                         raw_df, mapping_df,
                         base_date_col=st.session_state.get("_base_date_column"),
+                        force_unarchived=force_unarchived,
                     )
                     st.session_state.cleaned_df = cleaned
                     st.session_state["_base_date_match_info"] = match_info
+                    st.session_state["_archive_info"] = archive_info
+                    st.session_state["_force_applied"] = force_unarchived
 
                     audit.info(f"清洗完成，总件数: {len(cleaned)}（全部视为未回销）")
                     st.success(f"清洗完成！共 {len(cleaned)} 条未回销记录")
@@ -236,12 +316,15 @@ with st.sidebar:
             if st.button("🔄 重新执行清洗", type="primary", use_container_width=True):
                 with st.spinner("正在使用手动指定的日期列重新清洗..."):
                     mapping_df = st.session_state.get("_mapping_df")
-                    cleaned, match_info = run_pipeline(
+                    cleaned, match_info, archive_info = run_pipeline(
                         raw_df, mapping_df,
                         base_date_col=manual_col,
+                        force_unarchived=force_unarchived,
                     )
                     st.session_state.cleaned_df = cleaned
                     st.session_state["_base_date_match_info"] = match_info
+                    st.session_state["_archive_info"] = archive_info
+                    st.session_state["_force_applied"] = force_unarchived
                     st.rerun()
 
     # -- 导出 --
@@ -308,6 +391,11 @@ with st.sidebar:
 # ---- 主区域 ----
 st.title(dash_cfg.get("page_title", "业务数据清洗与未回销看板"))
 
+# -- 归档状态识别结果提示 --
+archive_notice = st.session_state.get("_archive_info")
+if archive_notice:
+    _render_archive_notice(archive_notice)
+
 if "cleaned_df" not in st.session_state or st.session_state.cleaned_df is None:
     st.info("👈 请从左侧上传数据并点击「执行清洗」")
 else:
@@ -321,6 +409,9 @@ else:
 
     if selected_people and "业务员" in df_filtered.columns:
         df_filtered = df_filtered[df_filtered["业务员"].isin(selected_people)]
+
+    if selected_statuses and status_col in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered[status_col].astype(str).str.strip().isin(selected_statuses)]
 
     unwritten_count = len(df_filtered)
 

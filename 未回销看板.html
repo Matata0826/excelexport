@@ -50,6 +50,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helv
 .count-line { font-size: .72rem; color: #888; white-space: nowrap; }
 #sidebar button { padding: 10px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: .85rem; font-weight: 600; width: 100%; transition: opacity .2s; }
 #sidebar button:hover { opacity: .85; }
+/* 多选框里的小按钮（全选/清空）需要覆盖上面的全宽按钮样式 */
+#sidebar button.mini-btn { width: auto; padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px; font-size: .72rem; flex-shrink: 0; background: #fff; color: var(--primary); }
+#sidebar .multi-select input[type=checkbox] { accent-color: var(--primary); width: 15px; height: 15px; flex-shrink: 0; cursor: pointer; margin: 0; }
 .btn-primary { background: var(--primary); color: #fff; }
 .btn-secondary { background: #e8ecf4; color: var(--primary); }
 .btn-outline { background: #fff; border: 1px solid var(--primary); color: var(--primary); }
@@ -78,6 +81,8 @@ details summary { cursor: pointer; font-weight: 600; color: #555; padding: 4px 0
 
 #chart-container { background: var(--card-bg); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); margin: 14px 0; }
 #chart { width: 100%; min-height: 420px; }
+#inst-chart-container { background: var(--card-bg); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); margin: 14px 0; }
+#instChart { width: 100%; min-height: 420px; }
 
 #table-container { background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); padding: 8px; margin-top: 6px; }
 #table-container table { width: 100%; border-collapse: collapse; font-size: .82rem; }
@@ -113,6 +118,11 @@ details summary { cursor: pointer; font-weight: 600; color: #555; padding: 4px 0
   <label>📤 上传主号映射模板 Excel <span style="font-weight:400;color:#999;">(可选)</span></label>
   <input type="file" id="mappingFile" accept=".xlsx,.xls" style="font-size:.8rem;">
 
+  <div style="font-size:.8rem;display:flex;align-items:flex-start;gap:6px;">
+    <input type="checkbox" id="forceUnarchivedCheck" onchange="onForceUnarchivedChange()" style="margin-top:2px;">
+    <label for="forceUnarchivedCheck" style="font-weight:400;cursor:pointer;margin:0;display:inline;">强制覆盖：将此表视为纯未归档数据（不进行状态筛选）</label>
+  </div>
+
   <hr>
   <details>
     <summary>📋 运行状态与日志</summary>
@@ -122,6 +132,16 @@ details summary { cursor: pointer; font-weight: 600; color: #555; padding: 4px 0
 
   <label>🏢 所属机构</label>
   <select id="institutionSelect"><option value="">全部机构</option></select>
+
+  <label>📋 归档状态</label>
+  <div class="people-filter">
+    <div class="multi-select-actions">
+      <button type="button" class="mini-btn" onclick="selectAllStatuses()">全选</button>
+      <button type="button" class="mini-btn" onclick="clearAllStatuses()">清空</button>
+      <span class="count-line" id="statusCount"></span>
+    </div>
+    <div class="multi-select" id="statusMultiSelect"></div>
+  </div>
 
   <label>🔍 业务员筛选</label>
   <div class="people-filter">
@@ -152,13 +172,15 @@ details summary { cursor: pointer; font-weight: 600; color: #555; padding: 4px 0
   </div>
 
   <div style="font-size:.7rem;color:#bbb;text-align:center;margin-top:8px;padding-top:12px;border-top:1px solid var(--border);">
-    v2.0 · 纯浏览器运行 · 无需 Python
+    v2.3 · 纯浏览器运行 · 无需 Python
   </div>
 </div>
 
 <!-- ==================== MAIN ==================== -->
 <div id="main">
   <h1>业务数据清洗与未回销看板</h1>
+
+  <div id="archiveAlert" class="alert" style="display:none;"></div>
 
   <div id="mainPlaceholder" class="placeholder">
     <div class="icon">👈</div>
@@ -172,10 +194,8 @@ details summary { cursor: pointer; font-weight: 600; color: #555; padding: 4px 0
     <div class="section-title">📈 未回销分布</div>
     <div id="chart-container"><div id="chart"></div></div>
     <hr class="divider">
-    <div class="section-title">📋 未回销明细 <span id="rowCount" style="font-weight:400;font-size:.82rem;color:#888;"></span></div>
-    <div id="table-container">
-      <div id="table-wrapper"><table><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table></div>
-    </div>
+    <div class="section-title">📊 各机构未归档分布 <button id="instBackBtn" onclick="exitInstDrill()" style="display:none;margin-left:10px;font-size:.78rem;padding:4px 12px;border:1px solid var(--border);border-radius:6px;background:#f0f4ff;color:#5470c6;cursor:pointer;">↩ 返回全部机构</button></div>
+    <div id="inst-chart-container"><div id="instChart"></div></div>
   </div>
 </div>
 
@@ -202,6 +222,13 @@ const CONFIG = {
       { label:"超90天", min:91, max:9999 }
     ]
   },
+  archive_status: {
+    column_aliases: ["归档状态","是否归档","归档","状态","Status","Archived"],
+    column_keywords: ["归档","状态","是否"],
+    column_exclude_keywords: ["时间","日期","date","time","月份"],
+    keep_values: ["未归档","归档不齐","未回销","未完成","否","No","N","0","False"],
+    archived_values: ["归档齐全","已归档","已完成","是","Yes","Y","1","True"]
+  },
   export: {
     filename_format: "{timestamp}_{description}_{salesperson}.xlsx",
     timestamp_format: "YYYYMMDD_HHmmss",
@@ -227,7 +254,10 @@ let rawData = null;           // array of objects (cleaned)
 let originalColumns = [];     // original column names from raw file
 let auditLog = [];
 let baseDateMatch = { status: "pending", matched_column: "" };
-let baseDateManualCol = null; // user-selected base date column
+let baseDateManualCol = null;
+let forceUnarchived = false;
+let archiveStatusResult = null; // user-selected base date column
+let instDrillIn = null;         // 机构下钻状态：null=全部机构视图，字符串=某机构
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -309,7 +339,107 @@ function normalizeColumns(rows) {
 }
 
 // ============================================================
-// PIPELINE STEP 2: Clean Invalid
+// PIPELINE STEP 2: Filter Archive Status（归档状态识别与过滤）
+// ============================================================
+function _norm(v) {
+  if (v === null || v === undefined) return "";
+  return String(v).trim().toLowerCase();
+}
+
+function findStatusColumn(columns, aliases, keywords, excludeKeywords) {
+  // 1. 别名精确匹配（忽略大小写与首尾空格）
+  const colsLower = columns.map(c => String(c).trim().toLowerCase());
+  for (const alias of aliases) {
+    const key = String(alias).trim().toLowerCase();
+    const idx = colsLower.indexOf(key);
+    if (key && idx >= 0) return columns[idx];
+  }
+  // 2. 关键字模糊匹配（按优先级遍历；跳过日期/时间列；「是否」为弱关键字）
+  const exclude = (excludeKeywords || []).map(k => String(k).trim().toLowerCase()).filter(Boolean);
+  for (const kw of keywords) {
+    const key = String(kw).trim().toLowerCase();
+    if (!key) continue;
+    for (let i = 0; i < columns.length; i++) {
+      const colKey = String(columns[i]).trim().toLowerCase();
+      if (exclude.some(e => colKey.includes(e))) continue;
+      if (key === "是否" && !["归档", "回销", "状态"].some(s => colKey.includes(s))) continue;
+      if (colKey.includes(key)) return columns[i];
+    }
+  }
+  return null;
+}
+
+function filterArchiveStatus(rows) {
+  const cfg = CONFIG.archive_status || {};
+  const aliases = cfg.column_aliases || ["归档状态", "是否归档", "状态", "Status"];
+  const keywords = cfg.column_keywords || ["归档", "状态", "是否"];
+  const excludeKeywords = cfg.column_exclude_keywords || ["时间", "日期", "date", "time", "月份"];
+  const keepValues = cfg.keep_values || ["未归档", "归档不齐"];
+  const archivedValues = cfg.archived_values || ["归档齐全", "已归档", "已完成"];
+
+  const keepSet = new Set(keepValues.map(_norm));
+  const archivedSet = new Set(archivedValues.map(_norm));
+
+  const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+  const statusCol = findStatusColumn(columns, aliases, keywords, excludeKeywords);
+
+  const total = rows.length;
+  const result = {
+    data_type: "pure_unarchived",
+    status_column: statusCol || "",
+    has_status_column: statusCol !== null,
+    force_unarchived: !!forceUnarchived,
+    total: total,
+    kept: total,
+    filtered: 0,
+    unarchived_count: 0,
+    archived_values_found: []
+  };
+
+  if (forceUnarchived || statusCol === null) {
+    archiveStatusResult = result;
+    return rows;
+  }
+
+  const isArchived = rows.map(r => archivedSet.has(_norm(r[statusCol])));
+  const isUnarchived = rows.map(r => keepSet.has(_norm(r[statusCol])));
+  result.unarchived_count = isUnarchived.filter(Boolean).length;
+
+  if (isArchived.some(Boolean)) {
+    result.data_type = "full";
+    result.archived_values_found = [...new Set(
+      rows.filter((r, i) => isArchived[i]).map(r => _norm(r[statusCol])).filter(Boolean)
+    )].sort();
+    result.filtered = isArchived.filter(Boolean).length;
+    rows = rows.filter((r, i) => !isArchived[i]);
+    result.kept = rows.length;
+  }
+
+  archiveStatusResult = result;
+  return rows;
+}
+
+function renderArchiveAlert() {
+  const el = document.getElementById("archiveAlert");
+  if (!archiveStatusResult) { el.style.display = "none"; return; }
+  const info = archiveStatusResult;
+  let cls, text;
+  if (info.force_unarchived) {
+    cls = "alert-info"; text = `🤖 已强制覆盖：跳过归档状态筛选，保留全量 ${info.total} 行数据`;
+  } else if (info.data_type === "full") {
+    cls = "alert-success"; text = `🤖 已自动识别为全量数据（状态列「${info.status_column}」），已过滤 ${info.filtered} 条已归档件，保留 ${info.kept} 条未归档记录`;
+  } else if (!info.has_status_column) {
+    cls = "alert-info"; text = `🤖 未找到归档状态列，视为纯未归档数据，保留全部 ${info.kept} 行`;
+  } else {
+    cls = "alert-info"; text = `🤖 状态列「${info.status_column}」中未发现已归档值，视为纯未归档数据，保留全部 ${info.kept} 行`;
+  }
+  el.className = "alert " + cls;
+  el.textContent = text;
+  el.style.display = "block";
+}
+
+// ============================================================
+// PIPELINE STEP 3: Clean Invalid
 // ============================================================
 function cleanInvalid(rows) {
   let cleaned = [];
@@ -338,7 +468,7 @@ function cleanInvalid(rows) {
 }
 
 // ============================================================
-// PIPELINE STEP 3: Apply Mapping
+// PIPELINE STEP 4: Apply Mapping
 // ============================================================
 function applyMapping(rows) {
   if (!mappingWorkbook) {
@@ -405,7 +535,7 @@ function applyMapping(rows) {
 }
 
 // ============================================================
-// PIPELINE STEP 4: Calculate Due Days
+// PIPELINE STEP 5: Calculate Due Days
 // ============================================================
 function calcDueDays(rows) {
   const aliases = CONFIG.due_days.base_date_aliases;
@@ -527,6 +657,7 @@ async function runPipeline() {
   }
 
   auditLog = [];
+  forceUnarchived = document.getElementById("forceUnarchivedCheck").checked;
   log("info", "====== 开始执行清洗管道 ======");
 
   try {
@@ -552,19 +683,25 @@ async function runPipeline() {
     // Step 1: Normalize columns
     rows = normalizeColumns(rows);
 
-    // Step 2: Clean invalid
+    // Step 2: Filter archive status（归档状态识别与过滤）
+    const beforeFilter = rows.length;
+    rows = filterArchiveStatus(rows);
+    log("info", `步骤2完成（归档状态筛选）: ${beforeFilter} → ${rows.length} 行`);
+
+    // Step 3: Clean invalid
     const beforeClean = rows.length;
     rows = cleanInvalid(rows);
-    log("info", `步骤2完成: ${beforeClean} → ${rows.length} 行`);
+    log("info", `步骤3完成: ${beforeClean} → ${rows.length} 行`);
 
-    // Step 3: Apply mapping
+    // Step 4: Apply mapping
     rows = applyMapping(rows);
 
-    // Step 4: Calculate due days
+    // Step 5: Calculate due days
     rows = calcDueDays(rows);
 
     rawData = rows;
     _lastPeopleList = null;
+    _lastStatusList = null;
     const _ps = document.getElementById("peopleSearch");
     if (_ps) _ps.value = "";
 
@@ -585,6 +722,7 @@ async function runPipeline() {
     }
 
     log("info", `====== 清洗完成，未回销件数: ${rows.length} ======`);
+    renderArchiveAlert();
     renderDashboard();
   } catch (err) {
     log("error", `管道执行失败: ${err.message}`);
@@ -621,6 +759,14 @@ function buildBaseDateManualSelector() {
   };
 }
 
+function onForceUnarchivedChange() {
+  forceUnarchived = document.getElementById("forceUnarchivedCheck").checked;
+  // 已有数据时，切换复选框自动重跑清洗（无需重新上传）
+  if (document.getElementById("rawFile").files.length > 0) {
+    runPipeline();
+  }
+}
+
 // ============================================================
 // RENDER DASHBOARD
 // ============================================================
@@ -632,7 +778,7 @@ function renderDashboard() {
   const filtered = getFilteredData();
   renderMetricCards(filtered);
   renderChart(filtered);
-  renderTable(filtered);
+  renderInstitutionChart(filtered);
   updateFilters();
   updateExportButtons();
 }
@@ -649,6 +795,20 @@ function getSelectedPeople() {
   return Array.from(checks).map(cb => cb.value);
 }
 
+function getSelectedStatuses() {
+  const checks = document.querySelectorAll("#statusMultiSelect input[type=checkbox]:checked");
+  return Array.from(checks).map(cb => cb.value);
+}
+
+function getStatusColumn() {
+  // 优先使用管道自动识别出的状态列名（可能是「是否归档」「状态」等），避免硬编码「归档状态」
+  const col = archiveStatusResult && archiveStatusResult.status_column;
+  if (col) return col;
+  // 回退：数据中确存在「归档状态」列时使用它
+  if (rawData && rawData.length > 0 && "归档状态" in rawData[0]) return "归档状态";
+  return null;
+}
+
 function getFilteredData() {
   if (!rawData) return [];
   let df = [...rawData];
@@ -660,10 +820,16 @@ function getFilteredData() {
   if (people.length > 0) {
     df = df.filter(r => people.includes(String(r["业务员"] || "").trim()));
   }
+  const statuses = getSelectedStatuses();
+  const statusCol = getStatusColumn();
+  if (statuses.length > 0 && statusCol) {
+    df = df.filter(r => statuses.includes(String(r[statusCol] || "").trim()));
+  }
   return df;
 }
 
 let _lastPeopleList = null;
+let _lastStatusList = null;
 
 function updateFilters() {
   if (!rawData) return;
@@ -674,6 +840,27 @@ function updateFilters() {
   const prevInst = instSel.value;
   instSel.innerHTML = '<option value="">全部机构</option>' + insts.map(i => `<option value="${esc(i)}">${esc(i)}</option>`).join("");
   if (insts.includes(prevInst)) instSel.value = prevInst;
+
+  // Archive status（多选）
+  const statusCol = getStatusColumn();
+  const statuses = statusCol
+    ? [...new Set(rawData.map(r => String(r[statusCol] || "").trim()).filter(Boolean))].sort()
+    : [];
+  const statusContainer = document.getElementById("statusMultiSelect");
+  const prevStatuses = getSelectedStatuses();
+  const statusValidPrev = prevStatuses.filter(s => statuses.includes(s));
+  const statusDefault = !_lastStatusList ? statuses : statusValidPrev;  // 首次/新数据默认全选，否则保留勾选
+  _lastStatusList = statuses;
+
+  statusContainer.innerHTML = statuses.map(s => {
+    const checked = statusDefault.includes(s) ? "checked" : "";
+    return `<label data-name="${esc(s)}"><input type="checkbox" value="${esc(s)}" ${checked}> <span>${esc(s)}</span></label>`;
+  }).join("");
+
+  if (statuses.length === 0) {
+    statusContainer.innerHTML = '<span class="count-line">无归档状态列</span>';
+  }
+  updateStatusCount();
 
   // People (cascading)
   const instFilter = instSel.value;
@@ -742,6 +929,24 @@ function clearAllPeople() {
   onFilterChange();
 }
 
+function selectAllStatuses() {
+  document.querySelectorAll("#statusMultiSelect input[type=checkbox]").forEach(cb => cb.checked = true);
+  onFilterChange();
+}
+
+function clearAllStatuses() {
+  document.querySelectorAll("#statusMultiSelect input[type=checkbox]").forEach(cb => cb.checked = false);
+  onFilterChange();
+}
+
+function updateStatusCount() {
+  const el = document.getElementById("statusCount");
+  if (!el) return;
+  const total = document.querySelectorAll("#statusMultiSelect label").length;
+  const selected = getSelectedStatuses().length;
+  el.textContent = total > 0 ? `已选 ${selected} / ${total}` : "";
+}
+
 let _filterUpdating = false;
 
 function onFilterChange() {
@@ -751,9 +956,10 @@ function onFilterChange() {
     // Update people checkboxes when institution changes (cascading)
     updateFilters();
     const filtered = getFilteredData();
+    instDrillIn = null;
     renderMetricCards(filtered);
     renderChart(filtered);
-    renderTable(filtered);
+    renderInstitutionChart(filtered);
     updateExportButtons();
   } finally {
     _filterUpdating = false;
@@ -762,8 +968,19 @@ function onFilterChange() {
 
 // Attach listeners
 document.getElementById("institutionSelect").addEventListener("change", onFilterChange);
+document.getElementById("statusMultiSelect").addEventListener("change", onFilterChange);
 document.getElementById("peopleMultiSelect").addEventListener("change", onFilterChange);
 document.getElementById("peopleSearch").addEventListener("input", applyPeopleSearch);
+
+// 机构下钻：点击机构柱 → 展示该机构下各业务员
+document.getElementById("instChart").addEventListener("plotly_click", function (event) {
+  if (instDrillIn) return;  // 已下钻时忽略再次点击
+  if (!event || !event.points || !event.points.length) return;
+  const inst = event.points[0].x;
+  if (!inst) return;
+  instDrillIn = inst;
+  renderInstitutionChart(getFilteredData());
+});
 
 // ============================================================
 // METRIC CARDS
@@ -852,76 +1069,67 @@ function renderChart(filtered) {
 }
 
 // ============================================================
-// DETAIL TABLE
+// INSTITUTION CHART (各机构未归档分布 → 业务员下钻，按天数区间累计)
 // ============================================================
-let tableSortKey = null;
-let tableSortAsc = true;
-
-function renderTable(filtered) {
-  document.getElementById("rowCount").textContent = `（${filtered.length} 条记录）`;
+function renderInstitutionChart(filtered) {
+  const el = document.getElementById("instChart");
+  const backBtn = document.getElementById("instBackBtn");
 
   if (filtered.length === 0) {
-    document.getElementById("tableHead").innerHTML = "";
-    document.getElementById("tableBody").innerHTML = '<tr><td colspan="10" style="text-align:center;color:#aaa;padding:30px;">暂无数据</td></tr>';
+    el.innerHTML = '<div class="placeholder"><p>暂无数据</p></div>';
+    backBtn.style.display = "none";
     return;
   }
 
-  // Determine display columns (priority order)
-  const priority = ["单号","主号机构","主号业务员","业务员","金额","基准日期","出单日期","到期天数"];
-  const allCols = Object.keys(filtered[0]);
-  const displayCols = priority.filter(c => allCols.includes(c));
-  // Add any remaining columns
-  for (const c of allCols) {
-    if (!displayCols.includes(c)) displayCols.push(c);
+  const bucketOrder = CONFIG.due_days.buckets.map(b => b.label);
+  const colors = CONFIG.dashboard.chart.color_sequence;
+
+  // 下钻维度：全部机构视图按「主号机构」，下钻视图按「业务员」
+  const dimension = instDrillIn ? "业务员" : "主号机构";
+  let scope = filtered;
+  if (instDrillIn) {
+    scope = filtered.filter(r => String(r["主号机构"] || "未知").trim() === instDrillIn);
   }
 
-  // Sort
-  let sorted = [...filtered];
-  if (tableSortKey && displayCols.includes(tableSortKey)) {
-    sorted.sort((a, b) => {
-      const va = a[tableSortKey], vb = b[tableSortKey];
-      if (typeof va === "number" && typeof vb === "number") {
-        return tableSortAsc ? va - vb : vb - va;
-      }
-      const sa = String(va || ""), sb = String(vb || "");
-      return tableSortAsc ? sa.localeCompare(sb, "zh") : sb.localeCompare(sa, "zh");
-    });
-  } else {
-    // Default: sort by 到期天数 desc
-    if (displayCols.includes("到期天数")) {
-      sorted.sort((a, b) => (b["到期天数"] || 0) - (a["到期天数"] || 0));
-    }
+  // 统计：维度值 × 天数区间 计数
+  const counts = {};
+  for (const r of scope) {
+    const key = String(r[dimension] || "未知").trim();
+    const bucket = getBucketLabel(r["到期天数"] || 0);
+    const k = `${key}|||${bucket}`;
+    counts[k] = (counts[k] || 0) + 1;
   }
 
-  // Render header
-  const headerHtml = displayCols.map(c => {
-    let arrow = "";
-    if (tableSortKey === c) arrow = tableSortAsc ? " ▲" : " ▼";
-    return `<th onclick="sortTable('${c}')">${c}${arrow}</th>`;
-  }).join("");
-  document.getElementById("tableHead").innerHTML = `<tr>${headerHtml}</tr>`;
+  const categories = [...new Set(scope.map(r => String(r[dimension] || "未知").trim()))].sort();
 
-  // Render body
-  const bodyHtml = sorted.map(r => {
-    const cells = displayCols.map(c => {
-      let v = r[c];
-      if (c === "金额" && typeof v === "number") v = v.toFixed(2);
-      if (c === "出单日期" && v instanceof Date) v = v.toISOString().split("T")[0];
-      return `<td>${v !== undefined && v !== null ? String(v) : ""}</td>`;
-    }).join("");
-    return `<tr>${cells}</tr>`;
-  }).join("");
-  document.getElementById("tableBody").innerHTML = bodyHtml;
+  // 每个天数区间一条堆叠轨迹（按区间累计）
+  const traces = bucketOrder.map((bucket, bi) => ({
+    x: categories,
+    y: categories.map(c => counts[`${c}|||${bucket}`] || 0),
+    name: bucket,
+    type: "bar",
+    marker: { color: colors[bi % colors.length] }
+  }));
+
+  const title = instDrillIn
+    ? `${instDrillIn} — 各业务员未归档（按天数区间累计）`
+    : "各机构未归档（按天数区间累计）";
+
+  Plotly.newPlot(el, traces, {
+    barmode: "stack",
+    title: { text: title },
+    xaxis: { title: instDrillIn ? "业务员" : "机构" },
+    yaxis: { title: "未归档件数" },
+    legend: { title: { text: "到期天数区间" } },
+    margin: { t: 60, r: 20, b: 70, l: 60 }
+  }, { responsive: true });
+
+  backBtn.style.display = instDrillIn ? "inline-block" : "none";
 }
 
-function sortTable(key) {
-  if (tableSortKey === key) {
-    tableSortAsc = !tableSortAsc;
-  } else {
-    tableSortKey = key;
-    tableSortAsc = true;
-  }
-  renderTable(getFilteredData());
+function exitInstDrill() {
+  instDrillIn = null;
+  renderInstitutionChart(getFilteredData());
 }
 
 // ============================================================

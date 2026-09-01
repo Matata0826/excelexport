@@ -1,4 +1,4 @@
-"""步骤3：主号映射替换 — 将原始小号业务员替换为主号业务员，同时标注机构。"""
+"""步骤4：主号映射替换 — 将原始小号业务员替换为主号业务员，同时标注机构。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pandas as pd
 from .base import CleaningStep, register_step
 
 
-@register_step("apply_mapping", order=3)
+@register_step("apply_mapping", order=4)
 class ApplyMapping(CleaningStep):
     """根据映射模板将原始业务员名替换为主号业务员，并补全主号机构/主号业务员列。
 

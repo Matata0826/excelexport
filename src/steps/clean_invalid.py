@@ -1,4 +1,4 @@
-"""步骤2：空值/异常值处理 — 金额列转numeric、日期列转datetime。"""
+"""步骤3：空值/异常值处理 — 金额列转numeric、日期列转datetime。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pandas as pd
 from .base import CleaningStep, register_step
 
 
-@register_step("clean_invalid", order=2)
+@register_step("clean_invalid", order=3)
 class CleanInvalid(CleaningStep):
     """处理金额和日期列的异常值。
 

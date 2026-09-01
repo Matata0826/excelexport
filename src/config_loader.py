@@ -35,7 +35,7 @@ def load_config(config_path: str | Path = "config.yaml") -> Dict[str, Any]:
 def _validate(config: Dict[str, Any], path: Path) -> None:
     """校验配置文件的必要字段。"""
     required_sections = ["paths", "column_mapping", "cleaning", "mapping",
-                         "due_days", "export", "dashboard", "logging"]
+                         "due_days", "archive_status", "export", "dashboard", "logging"]
     missing = [s for s in required_sections if s not in config]
     if missing:
         raise ValueError(f"[{path}] 缺少必要配置节: {missing}")
