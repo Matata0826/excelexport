@@ -8,3 +8,11 @@ exports/
 # 含客户 PII 的业务数据文件（仓库为公开，禁止提交）
 /*.xls
 /*.xlsx
+
+# templates/、tests/ 默认忽略 Excel（防止误放真实数据），仅放行已知安全的示例/模板文件
+/templates/*.xls
+/templates/*.xlsx
+!templates/mapping_template.xlsx
+/tests/*.xls
+/tests/*.xlsx
+!tests/sample_data.xlsx
