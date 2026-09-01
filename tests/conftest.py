@@ -29,6 +29,7 @@ def config() -> dict:
         },
         "due_days": {
             "reference_date": "2025-06-15",
+            "base_date_aliases": ["出单日期", "签单日期", "保单日期", "OrderDate", "IssueDate"],
             "buckets": [
                 {"label": "0-15天", "min": 0, "max": 15},
                 {"label": "15-30天", "min": 16, "max": 30},

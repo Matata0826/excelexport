@@ -26,12 +26,14 @@ class Pipeline:
     def run(
         self, df: pd.DataFrame,
         mapping_df: Optional[pd.DataFrame] = None,
+        base_date_col: Optional[str] = None,
     ) -> pd.DataFrame:
         """执行全部清洗步骤。
 
         Args:
             df: 原始数据
             mapping_df: 主号映射表（可选）
+            base_date_col: 手动指定的基准日期列名（可选，优先级高于自动匹配）
 
         Returns:
             清洗后的 DataFrame，包含到期天数列
@@ -61,6 +63,10 @@ class Pipeline:
                     self.audit.record_mapping_result(
                         ms["total"], ms["success"], ms["unmatched"]
                     )
+            elif step.name == "calc_due_days":
+                df = step.execute(df, self.config, base_date_col=base_date_col)  # type: ignore[call-arg]
+                self._due_days_match_status: str = getattr(step, "match_status", "pending")
+                self._due_days_matched_column: str = getattr(step, "matched_column", "")
             else:
                 df = step.execute(df, self.config)
 

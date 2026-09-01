@@ -58,9 +58,19 @@ def read_uploaded_excel(uploaded_file) -> Optional[pd.DataFrame]:
 def run_pipeline(
     raw_df: pd.DataFrame,
     mapping_df: Optional[pd.DataFrame],
-) -> pd.DataFrame:
+    base_date_col: Optional[str] = None,
+) -> tuple[pd.DataFrame, dict]:
+    """执行清洗管道，返回 (cleaned_df, match_info)。
+
+    match_info = {"status": "success"|"failed"|"pending", "matched_column": str}
+    """
     pipeline = Pipeline(config, audit)
-    return pipeline.run(raw_df, mapping_df=mapping_df)
+    df = pipeline.run(raw_df, mapping_df=mapping_df, base_date_col=base_date_col)
+    match_info: dict = {
+        "status": getattr(pipeline, "_due_days_match_status", "pending"),
+        "matched_column": getattr(pipeline, "_due_days_matched_column", ""),
+    }
+    return df, match_info
 
 
 def _get_institutions(df: pd.DataFrame) -> list[str]:
@@ -79,6 +89,15 @@ def _get_salespeople_for_institution(df: pd.DataFrame, institution: str) -> list
         return sorted(df["业务员"].dropna().astype(str).str.strip().unique().tolist())
     mask = df["主号机构"].astype(str).str.strip() == institution
     return sorted(df.loc[mask, "业务员"].dropna().astype(str).str.strip().unique().tolist())
+
+
+def _get_date_columns(df: pd.DataFrame) -> list[str]:
+    """返回 DataFrame 中所有日期/时间类型的列名，用于手动选择基准日期列。"""
+    date_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+    if not date_cols:
+        # 回退：返回所有列
+        date_cols = list(df.columns)
+    return date_cols
 
 
 # ---- 侧边栏 ----
@@ -168,14 +187,61 @@ with st.sidebar:
                 if raw_df is None:
                     st.error("无法读取上传文件")
                 else:
+                    # 缓存原始数据供后续手动重跑使用
+                    st.session_state["_raw_df"] = raw_df
+
                     mapping_df = None
                     if mapping_file is not None:
                         mapping_df = read_uploaded_excel(mapping_file)
+                    st.session_state["_mapping_df"] = mapping_df
 
-                    cleaned = run_pipeline(raw_df, mapping_df)
+                    # 清除上次手动选择的基准日期列（新文件可能有不同的列名）
+                    st.session_state.pop("_base_date_column", None)
+
+                    cleaned, match_info = run_pipeline(
+                        raw_df, mapping_df,
+                        base_date_col=st.session_state.get("_base_date_column"),
+                    )
                     st.session_state.cleaned_df = cleaned
+                    st.session_state["_base_date_match_info"] = match_info
+
                     audit.info(f"清洗完成，总件数: {len(cleaned)}（全部视为未回销）")
                     st.success(f"清洗完成！共 {len(cleaned)} 条未回销记录")
+                    st.rerun()
+
+    # -- 基准日期列自动识别结果提示 --
+    match_info = st.session_state.get("_base_date_match_info", {})
+    if match_info.get("status") == "success":
+        matched_col = match_info.get("matched_column", "")
+        st.success(f"✓ 已自动识别基准日期列：{matched_col}")
+
+    # -- 基准日期列手动兜底（自动匹配失败时显示）--
+    if match_info.get("status") == "failed":
+        st.divider()
+        st.warning("⚠️ 未自动识别到基准日期列")
+
+        raw_df: Optional[pd.DataFrame] = st.session_state.get("_raw_df")
+
+        if raw_df is not None and not raw_df.empty:
+            date_cols = _get_date_columns(raw_df)
+
+            manual_col = st.selectbox(
+                "请手动选择基准日期列：",
+                options=date_cols,
+                key="manual_date_col_selector",
+                help="自动识别失败，请手动选择用于计算到期天数的日期列",
+            )
+            st.session_state["_base_date_column"] = manual_col
+
+            if st.button("🔄 重新执行清洗", type="primary", use_container_width=True):
+                with st.spinner("正在使用手动指定的日期列重新清洗..."):
+                    mapping_df = st.session_state.get("_mapping_df")
+                    cleaned, match_info = run_pipeline(
+                        raw_df, mapping_df,
+                        base_date_col=manual_col,
+                    )
+                    st.session_state.cleaned_df = cleaned
+                    st.session_state["_base_date_match_info"] = match_info
                     st.rerun()
 
     # -- 导出 --

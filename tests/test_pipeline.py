@@ -12,7 +12,7 @@ class TestPipelineEndToEnd:
         # 列名已标准化
         assert "业务员" in result.columns
         assert "金额" in result.columns
-        assert "出单日期" in result.columns
+        assert "基准日期" in result.columns  # calc_due_days 自动匹配后重命名
 
         # 映射成功：业务员小号已替换为主号
         salespeople = result["业务员"].tolist()

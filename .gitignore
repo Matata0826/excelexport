@@ -4,3 +4,7 @@ logs/
 exports/
 *.pyc
 .DS_Store
+
+# 含客户 PII 的业务数据文件（仓库为公开，禁止提交）
+/*.xls
+/*.xlsx

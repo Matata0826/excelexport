@@ -48,7 +48,7 @@ def export_single(
     sheet_name = export_cfg.get("sheet_name", "未回销明细")
 
     # 保留全部原始列，仅调整列顺序：优先展示关键列，其余紧随其后
-    priority_cols = ["单号", "主号机构", "主号业务员", "业务员", "金额", "出单日期", "到期天数"]
+    priority_cols = ["单号", "主号机构", "主号业务员", "业务员", "金额", "基准日期", "出单日期", "到期天数"]
     other_cols = [c for c in df.columns if c not in priority_cols]
     ordered_cols = [c for c in priority_cols if c in df.columns] + other_cols
 
